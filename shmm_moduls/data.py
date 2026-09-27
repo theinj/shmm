@@ -65,6 +65,29 @@ def create_data(
     return states, emissions
 
 
+def sample_from_hmm(hmm, N: int, T: int):
+    """Zieht `N` frische Sequenzen der Länge `T` aus einem bereits
+    parametrisierten `hmm` (z.B. dem von `create_data`/`create_random_data`
+    mit `return_model=True` zurückgegebenen Objekt).
+
+    Wird verwendet, um NACH der Ziehung der Trainingsstichprobe eine
+    zweite, davon unabhängige Stichprobe aus demselben Modell zu ziehen -
+    ein Auswertungsset (Abschnitt 4.4), auf dem weder das jeweilige
+    Kandidatenmodell trainiert noch die Referenzauswertung des wahren
+    Modells "geschummelt" hat. `hmm.sample(...)` verwendet den globalen
+    TensorFlow-Zufallszustand (nicht den `seed`, der beim Aufbau des HMM
+    nur für dessen Parameter verwendet wurde), sodass zwei aufeinander-
+    folgende Aufrufe unabhängige Stichproben liefern.
+
+    Returns:
+        (states, emissions) wie bei `create_data`/`create_random_data`.
+    """
+    states, (emissions,) = hmm.sample(B=N, T=T)
+    states = tf.argmax(states[:, :, 0, :], -1)
+    emissions = tf.argmax(emissions[:, :, 0, :], -1)
+    return states, emissions
+
+
 def create_random_data(
     N: int,
     T: int,

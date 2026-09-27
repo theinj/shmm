@@ -136,30 +136,41 @@ def create_random_HMM_order_mix(
     analog zu `create_HMM_XOR_COMBINED_IF`):
         - N = K^2 Zustände, Zustand `sid(prev, curr) = prev*K + curr`
           repräsentiert das Symbolpaar (s_{t-1}, s_t).
-        - Von jedem Zustand (prev, curr) sind nur `out_degree` von K
-          möglichen Folgezuständen (curr, next) erlaubt (zufällig
-          gewählt, mit Dirichlet-verteilten Übergangswahrscheinlichkeiten).
-          Diese Sparsity ist an Lafferty, McCallum & Pereira (2001,
-          Abschnitt 5.2) angelehnt, die ihre Übergangs-/Emissionstabellen
-          aus demselben Grund dünn besetzen: um den Bayes-Fehler des
-          resultierenden Modells zu begrenzen ("In order to limit the
-          size of the Bayes error rate for the resulting models, the
-          conditional probability tables p_alpha are constrained to be
-          sparse") - NICHT, wie in einer früheren Fassung dieses
-          Kommentars fälschlich behauptet, um Label-Bias zu vermeiden
-          (das ist ein separates Experiment in Abschnitt 5.1 desselben
-          Papers).
-        - Die Emission (M mögliche Symbole - standardmäßig NICHT binär,
-          analog zum synthetischen Vergleichsexperiment bei Lafferty et
-          al. 2001, Abschnitt 5.2) mischt zwei Zielverteilungen konvex
-          mit `alpha`:
-              e(prev, curr) = (1-alpha) * e1(curr) + alpha * e2(prev, curr)
-          wobei `e1(curr)` NUR von `curr` abhängt (bei alpha=0 ist der
-          beobachtbare Prozess dadurch trotz K^2 Zuständen ein reiner
-          Order-1-Prozess) und `e2(prev, curr)` echt vom vollen Paar
-          abhängt (bei alpha=1 ein echter Order-2-Prozess). Beides sind
-          bei jedem Aufruf zufällig gezogene Dirichlet-Verteilungen über
-          den M Emissionssymbolen.
+        - SOWOHL Übergang ALS AUCH Emission mischen konvex mit `alpha`
+          zwischen einer Order-1- und einer Order-2-Zielverteilung -
+          analog zu Lafferty, McCallum & Pereira (2001, Abschnitt 5.2),
+          wo alpha ebenfalls Übergangs- UND Emissionsverteilung
+          gemeinsam zwischen einem Order-1- und einem Order-2-Modell
+          mischt (anders als in einer früheren Fassung dieser Funktion,
+          in der alpha ausschließlich die Emission steuerte und die
+          Übergänge unabhängig von alpha stets vom vollen Paar
+          abhingen):
+              p(next | prev, curr) = (1-alpha) * p1(next | curr) + alpha * p2(next | prev, curr)
+              e(prev, curr)        = (1-alpha) * e1(curr)        + alpha * e2(prev, curr)
+          `p1(next | curr)` und `e1(curr)` hängen NUR von `curr` ab (bei
+          alpha=0 ist der beobachtbare Prozess dadurch trotz K^2
+          Zuständen sowohl in der Übergangs- als auch in der
+          Emissionsstruktur ein reiner Order-1-Prozess); `p2(next |
+          prev, curr)` und `e2(prev, curr)` hängen echt vom vollen Paar
+          ab (bei alpha=1 ein echter Order-2-Prozess in beiden
+          Verteilungen). Alle vier Zielverteilungen (p1, p2, e1, e2)
+          sind bei jedem Aufruf unabhängig gezogene Dirichlet-
+          Verteilungen; für p1/p2 jeweils dünn besetzt über `out_degree`
+          von K möglichen Folgesymbolen (Sparsity-Regler), für e1/e2
+          über den vollen M Emissionssymbolen. Die Sparsity von p1/p2
+          ist an Lafferty et al. (2001, Abschnitt 5.2) angelehnt, die
+          ihre Übergangs-/Emissionstabellen aus demselben Grund dünn
+          besetzen: um den Bayes-Fehler des resultierenden Modells zu
+          begrenzen ("In order to limit the size of the Bayes error
+          rate for the resulting models, the conditional probability
+          tables p_alpha are constrained to be sparse") - NICHT, wie in
+          einer früheren Fassung dieses Kommentars fälschlich
+          behauptet, um Label-Bias zu vermeiden (das ist ein separates
+          Experiment in Abschnitt 5.1 desselben Papers). Da p1 und p2
+          unabhängig gezogene Teilmengen der K möglichen Folgesymbole
+          treffen können, hat ein Zustand (prev, curr) im Allgemeinen
+          bis zu 2*out_degree erlaubte Folgezustände (Vereinigung
+          beider Teilmengen) statt exakt out_degree.
 
     Args:
         K: Größe des zugrunde liegenden "wahren" Symbolalphabets
@@ -204,16 +215,38 @@ def create_random_HMM_order_mix(
     hmm = TFHMM(states=N)
 
     if restrict or initialize:
+        # Order-1-Übergangsstruktur: hängt nur von `curr` ab (K
+        # unabhängig gezogene, dünn besetzte Verteilungen über je
+        # `deg` von K möglichen Folgesymbolen).
+        order1_trans_syms = {curr: rng.choice(K, size=deg, replace=False) for curr in range(K)}
+        order1_trans_probs = {curr: rng.dirichlet(np.ones(deg)) for curr in range(K)}
+
+        # Order-2-Übergangsstruktur: hängt vom vollen Paar (prev, curr)
+        # ab (K*K unabhängig gezogene, dünn besetzte Verteilungen).
+        order2_trans_syms = {(p, c): rng.choice(K, size=deg, replace=False) for p in range(K) for c in range(K)}
+        order2_trans_probs = {(p, c): rng.dirichlet(np.ones(deg)) for p in range(K) for c in range(K)}
+
         allow: list[tuple[int, int]] = []
         trans_probs: list[float] = []
         for prev in range(K):
             for curr in range(K):
                 src = sid(prev, curr)
-                next_syms = rng.choice(K, size=deg, replace=False)
-                probs = rng.dirichlet(np.ones(deg))
-                for nxt, p in zip(next_syms, probs):
-                    allow.append((src, sid(curr, int(nxt))))
-                    trans_probs.append(float(p))
+                # Mische Order-1- und Order-2-Übergang konvex mit alpha,
+                # analog zur Emission unten. Beide Verteilungen können
+                # unterschiedliche Folgesymbole treffen - die kombinierte
+                # Verteilung liegt daher auf der Vereinigung beider
+                # Träger (ein Dict statt Array summiert Wahrscheinlichkeit
+                # korrekt auf, falls dasselbe Folgesymbol in beiden
+                # Teilmengen vorkommt) und bleibt normiert, da die
+                # Gewichte (1-alpha) und alpha sich zu 1 aufsummieren.
+                combined: dict[int, float] = {}
+                for nxt, p in zip(order1_trans_syms[curr], order1_trans_probs[curr]):
+                    combined[int(nxt)] = combined.get(int(nxt), 0.0) + (1.0 - a) * float(p)
+                for nxt, p in zip(order2_trans_syms[(prev, curr)], order2_trans_probs[(prev, curr)]):
+                    combined[int(nxt)] = combined.get(int(nxt), 0.0) + a * float(p)
+                for nxt, p in sorted(combined.items()):
+                    allow.append((src, sid(curr, nxt)))
+                    trans_probs.append(p)
 
     if restrict:
         hmm.transitioner.allow = allow

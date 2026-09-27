@@ -11,8 +11,8 @@ jedem Training in eine Kopie der jeweiligen Config eingesetzt.
 """
 from typing import Literal
 
-BASE_LATENT = 32
-BASE_STATES = 5
+BASE_LATENT = 16
+BASE_STATES = 3
 
 
 def _hmm(embed=16, states=BASE_STATES, order=1, heads=3, embed_ignore_order=False, latent=None):
@@ -32,7 +32,7 @@ def _mlp(units=9):
     return {"units": units}
 
 
-def _rnn(type="lstm", units=32, bidirectional=False):
+def _rnn(type="lstm", units=16, bidirectional=False):
     return {"type": type, "units": units, "bidirectional": bidirectional}
 
 
@@ -67,7 +67,7 @@ MODELS = {
     "multilayer_hmm_3x_order1": {
         "layers": 3, "latent": BASE_LATENT, "hmm": _hmm(order=1),
     },
-    "multilayer_hmm_2x_order1_mlp": {
+    "multilayer_hmm_2x_mlp": {
         "layers": 2, "latent": BASE_LATENT, "hmm": _hmm(order=1), "mlp": _mlp(units=9),
     },
     "multilayer_hmm_mixed_order": {
@@ -125,7 +125,6 @@ EXPERIMENTS = {
         "single_hmm_order1",
         "single_hmm_order2",
         "multilayer_hmm_2x_order1",
-        "multilayer_hmm_2x_order1_mlp",
         "bilstm_hmm_order1",
         "transformer_small",
     ],
@@ -134,7 +133,6 @@ EXPERIMENTS = {
         "single_hmm_order1",
         "single_hmm_order2",
         "multilayer_hmm_2x_order1",
-        "multilayer_hmm_2x_order1_mlp",
         "bilstm_hmm_order1",
         "transformer_small",
     ],

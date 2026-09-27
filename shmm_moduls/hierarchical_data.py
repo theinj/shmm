@@ -149,6 +149,9 @@ def create_hierarchical_data(
     check_uniqueness: bool = True,
     seed: Optional[int] = None,
     alphabet_size: int = 4,
+    templates: Optional[List[Template]] = None,
+    instance_seed: Optional[int] = None,
+    return_templates: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Erstellt hierarchische Daten (siehe Paper).
@@ -195,40 +198,71 @@ def create_hierarchical_data(
             One-Hot-Kodierung der Daten verwenden (siehe `num_symbols`
             in `training.py` bzw. `tf.one_hot(..., depth=alphabet_size)`
             in `auto_train_classification_simple.py`).
+        templates: Wenn gesetzt, werden DIESE Klassen-Templates
+            wiederverwendet statt neu gezogen (siehe `return_templates`)
+            - damit lässt sich zu einer bereits erzeugten Trainings-
+            stichprobe ein Auswertungsset MIT DENSELBEN Klassen, aber
+            unabhängig gezogenem Rauschen/Instanzen erzeugen (Abschnitt
+            4.4, "Metriken und Wiederholungen"). Ist `templates` gesetzt,
+            wird `seed` NICHT für die Template-Ziehung verwendet (es gibt
+            dann keine), sondern ausschließlich `instance_seed` für die
+            Instanzen.
+        instance_seed: Seed für die Ziehung der Instanzen (Rauschen,
+            Reihenfolge, Padding), getrennt vom Template-Seed. Wird nur
+            verwendet, wenn `templates` gesetzt ist; ohne `templates`
+            steuert weiterhin `seed` beides gemeinsam (unverändertes
+            Verhalten für bestehende Aufrufe).
+        return_templates: Wenn True, wird zusätzlich die Liste der
+            tatsächlich verwendeten Klassen-Templates zurückgegeben -
+            zum Wiederverwenden über `templates` beim Erzeugen eines
+            Auswertungssets.
 
     Returns:
         emissions: [N, max_len] array mit Werten aus {0, ...,
             alphabet_size-1} (max_len = Länge der längsten
             instanziierten Sequenz; kürzere werden aufgefüllt).
         states: [N, classes] one-hot Array, welche Klasse aktiv ist.
+        class_templates (nur wenn `return_templates=True`): die pro
+            Klasse gezogenen Templates.
     """
     if classes < 1 or K < 1 or D < 0 or L < 1 or N < 1:
         raise ValueError("N, L, classes, K müssen >= 1 sein und D >= 0.")
     if alphabet_size < 2:
         raise ValueError("alphabet_size muss >= 2 sein.")
 
-    rng = np.random.default_rng(seed)
+    if templates is None:
+        # Unverändertes Verhalten: EIN rng-Strom für Templates UND
+        # Instanzen, exakt wie vor Einführung des Auswertungssets.
+        rng = np.random.default_rng(seed)
 
-    class_templates: List[Template] = []
-    class_signatures: set = set()
-    for _ in range(classes):
-        attempts = 0
-        while True:
-            template = _build_template(
-                D, L, K, alpha, rng, check_uniqueness, alphabet_size=alphabet_size
-            )
-            sig = _template_signature(template)
-            if not check_uniqueness or sig not in class_signatures or attempts > BASE_ATTAMPTS:
-                class_signatures.add(sig)
-                class_templates.append(template)
-                if attempts > BASE_ATTAMPTS:
-                    warnings.warn(
-                        f"Konnte für die Klassen keine {classes} unterschiedlichen Muster finden "
-                        f"(classes vermutlich zu groß relativ zur verfügbaren Vielfalt oder einfach nur pech) "
-                        f"akzeptiere Duplikat."
-                    )
-                break
-            attempts += 1
+        class_templates: List[Template] = []
+        class_signatures: set = set()
+        for _ in range(classes):
+            attempts = 0
+            while True:
+                template = _build_template(
+                    D, L, K, alpha, rng, check_uniqueness, alphabet_size=alphabet_size
+                )
+                sig = _template_signature(template)
+                if not check_uniqueness or sig not in class_signatures or attempts > BASE_ATTAMPTS:
+                    class_signatures.add(sig)
+                    class_templates.append(template)
+                    if attempts > BASE_ATTAMPTS:
+                        warnings.warn(
+                            f"Konnte für die Klassen keine {classes} unterschiedlichen Muster finden "
+                            f"(classes vermutlich zu groß relativ zur verfügbaren Vielfalt oder einfach nur pech) "
+                            f"akzeptiere Duplikat."
+                        )
+                    break
+                attempts += 1
+    else:
+        # Wiederverwendete Templates (Auswertungsset): eigener,
+        # unabhängiger rng-Strom NUR für die Instanzen, damit dieselben
+        # Klassen mit frischem Rauschen instanziiert werden, statt
+        # (bei gleichem `seed`) exakt dieselben Instanzen wie im
+        # Training zu reproduzieren.
+        class_templates = templates
+        rng = np.random.default_rng(instance_seed)
 
     base = N // classes
     counts = [base] * classes
@@ -259,6 +293,8 @@ def create_hierarchical_data(
         emissions[out_idx] = seq
         states[out_idx, c] = 1
 
+    if return_templates:
+        return emissions, states, class_templates
     return emissions, states
 
 

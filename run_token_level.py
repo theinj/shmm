@@ -17,16 +17,19 @@ Abbruch setzt ein erneuter Aufruf automatisch dort fort, wo er unterbrochen
 wurde (siehe rescrf.training.cached_run). Diagramme lassen sich jederzeit,
 auch aus einem unvollständigen Lauf, mit regenerate_plots.py neu erzeugen.
 """
+import os
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # unterdrückt harmlose TF/XLA-INFO/WARNING-C++-Logs
+
 import tensorflow as tf
 
-from shmm_moduls.data import create_random_data
-from shmm_moduls.models import get_experiments
-from shmm_moduls.training import (
+from rescrf.data import create_random_data, sample_from_hmm
+from rescrf.models import get_experiments
+from rescrf.training import (
     run_single_training, evaluate_true_model, cached_run,
     all_cached, load_cached, print_summary,
 )
-from shmm_moduls.plotting import generate_all_plots, save_raw_results, plot_alpha_sweep, generate_aggregate_report, group_all_token_level
-from shmm_moduls.progress import make_load_bar, tick
+from rescrf.plotting import generate_all_plots, save_raw_results, plot_alpha_sweep, generate_aggregate_report, group_all_token_level
+from rescrf.progress import make_load_bar, tick
 import params as P
 
 
@@ -72,6 +75,16 @@ def run_token_level():
 
         dataset = _dataset_from_arrays(states, emissions, P.TOKENLEVEL_BATCH_SIZE, num_symbols)
 
+        # Auswertungsset (Abschnitt 4.4): unabhängig vom Training aus
+        # DEMSELBEN hmm gezogene Sequenzen, weder für das Training der
+        # Kandidatenmodelle noch für deren Konvergenz-/Auswahlkriterien
+        # verwendet. Sowohl die trainierten Modelle als auch die
+        # Referenzauswertung (evaluate_true_model) werden am Ende darauf
+        # ausgewertet ("eval_loss"/"eval_accuracy"), damit der Vergleich
+        # fair ist - siehe run_single_training-Docstring.
+        eval_states, eval_emissions = sample_from_hmm(hmm, P.TOKENLEVEL_EVAL_SIZE, P.TOKENLEVEL_T)
+        eval_dataset = _dataset_from_arrays(eval_states, eval_emissions, P.TOKENLEVEL_EVAL_SIZE, num_symbols)
+
         # Tatsächliche Zustandsanzahl (K^2) aus den Daten selbst ableiten -
         # MODELS-Konfigurationen enthalten bewusst kein festes "output"
         # mehr (siehe models.py), da es je Durchlauf von K abhängt.
@@ -80,7 +93,7 @@ def run_token_level():
         true_result = cached_run(
             results_dir, hierarchy_config, "true_generator", 0.0,
             lambda: evaluate_true_model(
-                hmm=hmm, dataset=dataset, T=P.TOKENLEVEL_T, steps=P.STEPS_PER_EPOCH,
+                hmm=hmm, dataset=eval_dataset, T=P.TOKENLEVEL_T, steps=1,
                 hierarchy_config=hierarchy_config, results_dir=results_dir, num_symbols=num_symbols,
             ),
         )
@@ -94,6 +107,7 @@ def run_token_level():
                     lambda exp_name=exp_name, model_config=model_config, lr=lr: run_single_training(
                         exp_name=exp_name, model_config=model_config, learning_rate=lr,
                         T=P.TOKENLEVEL_T, weight_decay=P.WEIGHT_DECAY, dataset=dataset,
+                        eval_dataset=eval_dataset,
                         save_checkpoints=P.SAVE_CHECKPOINTS,
                         convergence_threshold=P.CONVERGENCE_THRESHOLD,
                         convergence_patience=P.CONVERGENCE_PATIENCE,
@@ -117,11 +131,27 @@ def run_token_level():
             ok_results, exp_names=P.TOKENLEVEL_ALPHA_SWEEP_MODELS,
             out_path=P.TOKENLEVEL_RESULTS_PATH / f"alpha_sweep_{metric}.png", metric=metric,
         )
+    # Derselbe Sweep auf dem Auswertungsset ("eval_loss"/"eval_accuracy")
+    # - der eigentlich faire Vergleich zwischen Referenz und trainierten
+    # Modellen, siehe run_single_training-Docstring.
+    for metric in ("eval_loss", "eval_accuracy"):
+        plot_alpha_sweep(
+            ok_results, exp_names=P.TOKENLEVEL_ALPHA_SWEEP_MODELS,
+            out_path=P.TOKENLEVEL_RESULTS_PATH / f"alpha_sweep_{metric}.png", metric=metric,
+        )
 
     # Mittelwert/Std. über alle TOKENLEVEL_NUM_HMMS Durchläufe hinweg
     # (K/out_degree/M sind über alle Durchläufe konstant, siehe
     # group_all_token_level) - Abschnitt 4.4 "Metriken und Wiederholungen".
+    # EINMAL auf den Trainingsmetriken (Diagnose: wie gut wird die feste
+    # Trainingsstichprobe gefittet) und EINMAL auf dem unabhängigen
+    # Auswertungsset (der für den Modellvergleich maßgebliche Bericht,
+    # inkl. fairer Referenzauswertung).
     generate_aggregate_report(ok_results, P.TOKENLEVEL_RESULTS_PATH, group_fn=group_all_token_level)
+    generate_aggregate_report(
+        ok_results, P.TOKENLEVEL_RESULTS_PATH / "eval", group_fn=group_all_token_level,
+        metrics=("eval_loss", "eval_accuracy"),
+    )
 
     print(f"\nErgebnisse: {P.TOKENLEVEL_RESULTS_PATH.resolve()}")
     return all_results

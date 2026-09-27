@@ -306,14 +306,24 @@ def evaluate_true_model(
     num_symbols: int = 2,
 ) -> RunResult:
     """
-    Wertet das DATENGENERIERENDE HMM auf demselben Dataset aus, das auch
-    für das Training der übrigen Modelle verwendet wird - als fixe
-    Referenz ("was ist mit Kenntnis der wahren Dynamik erreichbar",
-    Abschnitt 4.1). Es wird ausschließlich `model.evaluate(...)`
-    aufgerufen, niemals `model.fit(...)`: `.evaluate()` führt per
-    Definition keine Gradienten-Updates aus; zusätzlich wird
-    `model.trainable = False` gesetzt, um dies defensiv abzusichern. Das
-    wahre HMM lernt hier also nie.
+    Wertet das DATENGENERIERENDE HMM aus - als fixe Referenz ("was ist
+    mit Kenntnis der wahren Dynamik erreichbar", Abschnitt 4.1). Es wird
+    ausschließlich `model.evaluate(...)` aufgerufen, niemals
+    `model.fit(...)`: `.evaluate()` führt per Definition keine
+    Gradienten-Updates aus; zusätzlich wird `model.trainable = False`
+    gesetzt, um dies defensiv abzusichern. Das wahre HMM lernt hier also
+    nie.
+
+    WICHTIG: `dataset` sollte das unabhängig gezogene Auswertungsset
+    sein (siehe `data.sample_from_hmm`/`hierarchical_data.
+    create_hierarchical_data(..., templates=...)`), NICHT die
+    Trainingsstichprobe der übrigen Modelle - nur so ist der Vergleich
+    mit deren ebenfalls auf dem Auswertungsset berichteten Gütewerten
+    (Abschnitt 4.4, `eval_loss`/`eval_accuracy`) fair: Da das wahre
+    Modell nie angepasst wird, kann es die feste, kleine Trainings-
+    stichprobe nicht überanpassen - trainierte Modelle mit ausreichender
+    Kapazität hingegen schon, was den Vergleich sonst zugunsten der
+    trainierten Modelle verzerrt.
 
     `hmm(x, mode=HMMMode.POSTERIOR)` liefert für eine One-Hot-kodierte
     Emissionssequenz `x` der Form [Batch, T, num_symbols] eine
@@ -342,6 +352,15 @@ def evaluate_true_model(
         elapsed = time.time() - start
 
         history = {k: [v] for k, v in eval_out.items()}
+        # Zusätzlich unter "eval_loss"/"eval_accuracy" spiegeln, damit
+        # dieselben Metrik-Keys wie bei den trainierten Modellen
+        # (run_single_training, Auswertung auf dem Auswertungsset)
+        # existieren und Aggregat-Plots/-Tabellen (plotting.py) beide
+        # direkt miteinander vergleichen können.
+        if "loss" in eval_out:
+            history["eval_loss"] = [eval_out["loss"]]
+        if "accuracy" in eval_out:
+            history["eval_accuracy"] = [eval_out["accuracy"]]
         print(f"  -> Referenz-loss={eval_out.get('loss'):.4f}"
               + (f", accuracy={eval_out['accuracy']:.4f}" if "accuracy" in eval_out else ""))
 
@@ -383,6 +402,7 @@ def run_single_training(
     task: str = "token_level",  # "token_level" oder "classification" (Kapitel 3.1 / 3.2)
     results_dir: Path | None = None,
     num_symbols: int = 2,
+    eval_dataset: tf.data.Dataset | None = None,
 ) -> RunResult:
     """
     Trainiert ein einzelnes Modell bis zur Konvergenz (Abschnitt 4.2):
@@ -404,6 +424,23 @@ def run_single_training(
     num_symbols: Größe des Emissionsalphabets (One-Hot-Tiefe von
         `dataset`'s x-Komponente) - muss zur tatsächlichen Kodierung der
         Daten passen.
+    eval_dataset: Optionales, von `dataset` UNABHÄNGIG gezogenes
+        Auswertungsset (Abschnitt 4.4, "Metriken und Wiederholungen") -
+        z.B. via `data.sample_from_hmm` oder `create_hierarchical_data(
+        ..., templates=...)`. Wenn gesetzt, wird das fertig trainierte
+        Modell (mit den nach `BestValueStopping` wiederhergestellten
+        Gewichten der besten Epoche) EINMAL zusätzlich auf `eval_dataset`
+        ausgewertet; die Ergebnisse landen unter den zusätzlichen
+        history-Keys "eval_loss"/"eval_accuracy" (bei der
+        Klassifikationsaufgabe: des am Ende besseren Kopfes). Ohne
+        `eval_dataset` bleibt das bisherige Verhalten unverändert - es
+        werden nur die Trainingsmetriken ("loss"/"accuracy" der letzten
+        Epoche auf der Trainingsstichprobe) berichtet, wie zuvor. Der
+        Vergleich mit der Referenzauswertung (`evaluate_true_model`) ist
+        nur über "eval_loss"/"eval_accuracy" fair, da die Referenz nie
+        trainiert wird und daher die Trainingsstichprobe nicht
+        überanpassen kann, ein flexibles Modell mit genug Kapazität aber
+        schon.
     """
     print(f"\n=== Training '{exp_name}' | lr={learning_rate:g}" +
           (f" | {hierarchy_config}" if hierarchy_config else "") + " ===")
@@ -473,6 +510,8 @@ def run_single_training(
     if classification_head_names is not None:
         head_a, head_b = classification_head_names
         dataset = dataset.map(lambda x, y: (x, {head_a: y, head_b: y}))
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.map(lambda x, y: (x, {head_a: y, head_b: y}))
         # muss als ERSTER Callback laufen (siehe BestOfHeadsAdapter-Docstring)
         head_adapter_cb = BestOfHeadsAdapter(head_names=classification_head_names)
         callbacks.append(head_adapter_cb)
@@ -520,8 +559,34 @@ def run_single_training(
     if best_head is not None:
         print(f"  -> besserer Kopf: {best_head}")
 
+    history_dict = history.history
+
+    # Auswertung auf dem unabhängigen Auswertungsset (Abschnitt 4.4):
+    # `model` trägt an dieser Stelle bereits die von BestValueStopping
+    # wiederhergestellten Gewichte der besten Epoche (on_train_end lief
+    # vor Rückkehr aus model.fit). Ein Fehler hier lässt den bereits
+    # abgeschlossenen Trainingslauf NICHT scheitern - es fehlen dann nur
+    # die eval_*-Metriken.
+    if eval_dataset is not None:
+        try:
+            eval_out = model.evaluate(eval_dataset, steps=1, verbose=0, return_dict=True)
+            if classification_head_names is not None and best_head is not None:
+                eval_loss = eval_out.get(f"{best_head}_loss")
+                eval_accuracy = eval_out.get(f"{best_head}_accuracy")
+            else:
+                eval_loss = eval_out.get("loss")
+                eval_accuracy = eval_out.get("accuracy")
+            if eval_loss is not None:
+                history_dict["eval_loss"] = [eval_loss]
+            if eval_accuracy is not None:
+                history_dict["eval_accuracy"] = [eval_accuracy]
+            print(f"  -> Auswertungsset: loss={eval_loss:.4f}"
+                  + (f", accuracy={eval_accuracy:.4f}" if eval_accuracy is not None else ""))
+        except Exception as exc:
+            print(f"  -> FEHLER bei der Auswertung auf dem Auswertungsset: {exc}")
+
     return _finish(RunResult(
-        exp_name=exp_name, learning_rate=learning_rate, history=history.history, train_seconds=elapsed,
+        exp_name=exp_name, learning_rate=learning_rate, history=history_dict, train_seconds=elapsed,
         hierarchy_config=hierarchy_config, task=task, epochs_trained=epochs_trained,
         converged=convergence_cb.converged, best_loss=best_value_cb.best_value,
         best_epoch=best_value_cb.best_epoch, restored_best_weights=best_value_cb.restored,

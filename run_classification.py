@@ -12,15 +12,19 @@ Kandidatenmodelle darauf trainiert (siehe rescrf.hierarchical_data).
 
 Absturzsicherheit: wie run_token_level.py, siehe dort.
 """
+import os
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # unterdrückt harmlose TF/XLA-INFO/WARNING-C++-Logs
+
 import itertools
 
+import numpy as np
 import tensorflow as tf
 
-from shmm_moduls.hierarchical_data import create_hierarchical_data
-from shmm_moduls.models import get_experiments
-from shmm_moduls.training import run_single_training, cached_run, all_cached, load_cached, print_summary
-from shmm_moduls.plotting import generate_all_plots, save_raw_results, generate_aggregate_report, group_by_classification_config
-from shmm_moduls.progress import make_load_bar, tick
+from rescrf.hierarchical_data import create_hierarchical_data
+from rescrf.models import get_experiments
+from rescrf.training import run_single_training, cached_run, all_cached, load_cached, print_summary
+from rescrf.plotting import generate_all_plots, save_raw_results, generate_aggregate_report, group_by_classification_config
+from rescrf.progress import make_load_bar, tick
 import params as P
 
 
@@ -38,16 +42,53 @@ def _configs() -> list[dict]:
 
 
 def _dataset(config: dict, seed: int):
-    emissions, states = create_hierarchical_data(
+    """Erzeugt Trainings- UND Auswertungsset: Letzteres verwendet
+    DIESELBEN Klassen-Templates (`return_templates`/`templates`,
+    hierarchical_data.create_hierarchical_data), aber unabhängig davon
+    gezogenes Rauschen (`instance_seed`), sodass beide Mengen dieselbe
+    Aufgabe, aber disjunkte konkrete Sequenzen enthalten (Abschnitt 4.4).
+    """
+    emissions, states, class_templates = create_hierarchical_data(
         N=P.CLASS_N_SAMPLES, L=config["L"], classes=config["classes"], K=config["K"], D=config["D"],
         alpha=P.CLASS_NOISE_ALPHA, head_noise=False, tail_noise=None, check_uniqueness=True,
-        seed=seed, alphabet_size=P.CLASS_ALPHABET_SIZE,
+        seed=seed, alphabet_size=P.CLASS_ALPHABET_SIZE, return_templates=True,
     )
-    x = tf.one_hot(emissions, depth=P.CLASS_ALPHABET_SIZE)
-    T = x.shape[1]
+    eval_emissions, eval_states = create_hierarchical_data(
+        N=P.CLASS_EVAL_SIZE, L=config["L"], classes=config["classes"], K=config["K"], D=config["D"],
+        alpha=P.CLASS_NOISE_ALPHA, head_noise=False, tail_noise=None, check_uniqueness=True,
+        alphabet_size=P.CLASS_ALPHABET_SIZE, templates=class_templates,
+        instance_seed=seed + P.CLASS_EVAL_SEED_OFFSET,
+    )
+
     num_classes = states.shape[1]
+
+    # Padding-Länge kann zwischen Trainings- und Auswertungsset leicht
+    # abweichen (max_len hängt von den längsten instanziierten Sequenzen
+    # der jeweiligen Stichprobe ab) - auf die GEMEINSAME maximale Länge
+    # angleichen, damit Trainings- und Eval-Modell dieselbe Input-Shape T
+    # verwenden. Wie in hierarchical_data._instantiate wird dabei mit
+    # gleichverteilten Zufallssymbolen aufgefüllt (nicht mit Nullen), um
+    # dem Modell keine künstliche, im Training nie gesehene
+    # "Padding-Kategorie" zu präsentieren.
+    T = max(emissions.shape[1], eval_emissions.shape[1])
+
+    def _pad_to(arr: np.ndarray, length: int, rng: np.random.Generator) -> np.ndarray:
+        if arr.shape[1] >= length:
+            return arr
+        pad = rng.integers(0, P.CLASS_ALPHABET_SIZE, size=(arr.shape[0], length - arr.shape[1]))
+        return np.concatenate([arr, pad], axis=1)
+
+    pad_rng = np.random.default_rng(seed)
+    emissions = _pad_to(emissions, T, pad_rng)
+    eval_emissions = _pad_to(eval_emissions, T, pad_rng)
+
+    x = tf.one_hot(emissions, depth=P.CLASS_ALPHABET_SIZE)
     dataset = tf.data.Dataset.from_tensor_slices((x, states)).shuffle(1000).repeat().batch(P.CLASS_BATCH_SIZE)
-    return dataset, T, num_classes
+
+    eval_x = tf.one_hot(eval_emissions, depth=P.CLASS_ALPHABET_SIZE)
+    eval_dataset = tf.data.Dataset.from_tensor_slices((eval_x, eval_states)).batch(P.CLASS_EVAL_SIZE)
+
+    return dataset, eval_dataset, T, num_classes
 
 
 def run_classification():
@@ -74,17 +115,19 @@ def run_classification():
                 tick(load_bar)
                 continue
 
-            dataset, T, num_classes = _dataset(config, seed)
+            dataset, eval_dataset, T, num_classes = _dataset(config, seed)
 
             for exp_name, base_config in experiments.items():
                 model_config = {**base_config, "output": num_classes}
                 for lr in P.LEARNING_RATES:
                     result = cached_run(
                         results_dir, hierarchy_config, exp_name, lr,
-                        lambda exp_name=exp_name, model_config=model_config, lr=lr, dataset=dataset, T=T:
+                        lambda exp_name=exp_name, model_config=model_config, lr=lr, dataset=dataset,
+                        eval_dataset=eval_dataset, T=T:
                         run_single_training(
                             exp_name=exp_name, model_config=model_config, learning_rate=lr,
                             T=T, weight_decay=P.WEIGHT_DECAY, dataset=dataset,
+                            eval_dataset=eval_dataset,
                             save_checkpoints=P.SAVE_CHECKPOINTS,
                             convergence_threshold=P.CONVERGENCE_THRESHOLD,
                             convergence_patience=P.CONVERGENCE_PATIENCE,
@@ -106,8 +149,15 @@ def run_classification():
 
     # Mittelwert/Std. über alle CLASS_NUM_RUNS Wiederholungen JEDER
     # Parameterkombination (D,K,L,C,M) getrennt, siehe
-    # group_by_classification_config - Abschnitt 4.4.
+    # group_by_classification_config - Abschnitt 4.4. Zusätzlich zu den
+    # Trainingsmetriken ("loss"/"accuracy") derselbe Bericht auf dem
+    # unabhängigen Auswertungsset ("eval_loss"/"eval_accuracy") - der für
+    # den Modellvergleich maßgebliche.
     generate_aggregate_report(ok_results, P.CLASS_RESULTS_PATH, group_fn=group_by_classification_config)
+    generate_aggregate_report(
+        ok_results, P.CLASS_RESULTS_PATH / "eval", group_fn=group_by_classification_config,
+        metrics=("eval_loss", "eval_accuracy"),
+    )
 
     print(f"\nErgebnisse: {P.CLASS_RESULTS_PATH.resolve()}")
     return all_results
