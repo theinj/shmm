@@ -1,4 +1,4 @@
-"""rescrf - Residual-CRF-Bibliothek (siehe Bachelorarbeit, Kapitel 2-4).
+"""shmm_moduls - Bibliotheka (siehe Bachelorarbeit, Kapitel 2-4).
 
 Öffentliche Schnittstelle: Modellaufbau (model), Datengenerierung
 (data, hierarchical_data, util) und Trainingslogik (training).

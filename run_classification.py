@@ -8,7 +8,7 @@ Direkt aufrufbar, kein Argumentparser:
 Alle Parameter stehen zentral in params.py. Für jede Kombination aus
 Hierarchietiefe D, Mustern pro Ebene K, Basislänge L und Klassenzahl C
 wird CLASS_NUM_RUNS-mal ein neuer Datensatz gezogen und die
-Kandidatenmodelle darauf trainiert (siehe rescrf.hierarchical_data).
+Kandidatenmodelle darauf trainiert (siehe shmm_moduls.hierarchical_data).
 
 Absturzsicherheit: wie run_token_level.py, siehe dort.
 """
@@ -20,11 +20,11 @@ import itertools
 import numpy as np
 import tensorflow as tf
 
-from rescrf.hierarchical_data import create_hierarchical_data
-from rescrf.models import get_experiments
-from rescrf.training import run_single_training, cached_run, all_cached, load_cached, print_summary
-from rescrf.plotting import generate_all_plots, save_raw_results, generate_aggregate_report, group_by_classification_config
-from rescrf.progress import make_load_bar, tick
+from shmm_moduls.hierarchical_data import create_hierarchical_data
+from shmm_moduls.models import get_experiments
+from shmm_moduls.training import run_single_training, cached_run, all_cached, load_cached, print_summary
+from shmm_moduls.plotting import generate_all_plots, save_raw_results, generate_aggregate_report, group_by_classification_config
+from shmm_moduls.progress import make_load_bar, tick
 import params as P
 
 

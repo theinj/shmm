@@ -7,14 +7,14 @@ Direkt aufrufbar, kein Argumentparser:
 
 Alle Parameter stehen zentral in params.py. Pro Durchlauf wird ein
 frisches, zufälliges, dünn besetztes, alpha-gemischtes HMM erzeugt (siehe
-rescrf.util.create_random_HMM_order_mix), auf dessen Stichprobe die
+shmm_moduls.util.create_random_HMM_order_mix), auf dessen Stichprobe die
 Kandidatenmodelle trainiert und zusätzlich das datengenerierende HMM
 selbst ausgewertet werden (keine Training, siehe evaluate_true_model).
 
 Absturzsicherheit: Jedes einzelne Ergebnis wird SOFORT nach Abschluss
 unter <TOKENLEVEL_RESULTS_PATH>/partial_results/ gespeichert. Nach einem
 Abbruch setzt ein erneuter Aufruf automatisch dort fort, wo er unterbrochen
-wurde (siehe rescrf.training.cached_run). Diagramme lassen sich jederzeit,
+wurde (siehe shmm_moduls.training.cached_run). Diagramme lassen sich jederzeit,
 auch aus einem unvollständigen Lauf, mit regenerate_plots.py neu erzeugen.
 """
 import os
@@ -22,14 +22,14 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # unterdrückt harmlose TF/X
 
 import tensorflow as tf
 
-from rescrf.data import create_random_data, sample_from_hmm
-from rescrf.models import get_experiments
-from rescrf.training import (
+from shmm_moduls.data import create_random_data, sample_from_hmm
+from shmm_moduls.models import get_experiments
+from shmm_moduls.training import (
     run_single_training, evaluate_true_model, cached_run,
     all_cached, load_cached, print_summary,
 )
-from rescrf.plotting import generate_all_plots, save_raw_results, plot_alpha_sweep, generate_aggregate_report, group_all_token_level
-from rescrf.progress import make_load_bar, tick
+from shmm_moduls.plotting import generate_all_plots, save_raw_results, plot_alpha_sweep, generate_aggregate_report, group_all_token_level
+from shmm_moduls.progress import make_load_bar, tick
 import params as P
 
 

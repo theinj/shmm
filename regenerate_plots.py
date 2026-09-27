@@ -6,22 +6,14 @@ unter <results_dir>/partial_results/).
 Nützlich um Diagramme zu sehen, während ein Training noch läuft, oder um
 sie aus einem abgebrochenen/abgestürzten Lauf neu zu erzeugen, ohne neu zu
 trainieren.
-
-Direkt aufrufbar, kein Argumentparser:
-
-    from regenerate_plots import regenerate_plots
-    from rescrf.plotting import group_all_token_level, group_by_classification_config
-    regenerate_plots(params.TOKENLEVEL_RESULTS_PATH, alpha_sweep=params.TOKENLEVEL_ALPHA_SWEEP_MODELS,
-                      group_fn=group_all_token_level)
-    regenerate_plots(params.CLASS_RESULTS_PATH, group_fn=group_by_classification_config)
 """
 import os
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # unterdrückt harmlose TF/XLA-INFO/WARNING-C++-Logs
 
 from pathlib import Path
 
-from rescrf.training import load_all_results
-from rescrf.plotting import (
+from shmm_moduls.training import load_all_results
+from shmm_moduls.plotting import (
     generate_all_plots, save_raw_results, plot_alpha_sweep,
     generate_aggregate_report, group_by_classification_config,
 )
@@ -62,7 +54,7 @@ def regenerate_plots(
 
 if __name__ == "__main__":
     import params as P
-    from rescrf.plotting import group_all_token_level
+    from shmm_moduls.plotting import group_all_token_level
 
     regenerate_plots(P.TOKENLEVEL_RESULTS_PATH, alpha_sweep=P.TOKENLEVEL_ALPHA_SWEEP_MODELS, group_fn=group_all_token_level)
     regenerate_plots(P.CLASS_RESULTS_PATH, group_fn=group_by_classification_config)

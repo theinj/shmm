@@ -2,7 +2,7 @@
 der Bachelorarbeit: HMM erster/höherer Ordnung, mehrschichtige HMM-Stapel,
 RNN/LSTM-Varianten mit und ohne HMM, Transformer, MLP-Baseline).
 
-Jede Config in MODELS wird an `rescrf.get_model(...)` durchgereicht. Das
+Jede Config in MODELS wird an `shmm_moduls.get_model(...)` durchgereicht. Das
 Feld "output" (Anzahl Ausgabeklassen bzw. -zustände) hängt vom jeweiligen
 Durchlauf ab - Anzahl HMM-Zustände (Zustandsdekodierung) bzw. Anzahl
 Klassen (Klassifikation), siehe Kapitel 3 - und wird deshalb NICHT hier
