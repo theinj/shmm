@@ -95,6 +95,10 @@ MODELS = {
     "gru_hmm_order1": {
         "layers": 1, "latent": BASE_LATENT, "rnn": _rnn("gru", units=16), "hmm": _hmm(order=1),
     },
+    "bilstm": {
+        "layers": 0, "latent": BASE_LATENT,
+        "rnn": _rnn("lstm", units=16, bidirectional=True), "hmm": _hmm(),
+    },
     "bilstm_hmm_order1": {
         "layers": 1, "latent": BASE_LATENT,
         "rnn": _rnn("lstm", units=16, bidirectional=True), "hmm": _hmm(order=1),
@@ -129,7 +133,8 @@ EXPERIMENTS = {
         "single_hmm_order2",
         "multilayer_hmm_2x_order1",
         "multilayer_hmm_2x_order1_mlp",
-        "bilstm_hmm_order1",
+        "multilayer_hmm_3x_order1_mlp",
+        "bilstm",
         "transformer_small",
     ],
     "base_class": [
@@ -140,6 +145,7 @@ EXPERIMENTS = {
         "multilayer_hmm_2x_order1_mlp",
         "multilayer_hmm_3x_order1_mlp",
         "transformer_small",
+        "bilstm",
     ],
     "full": list(MODELS),
 }

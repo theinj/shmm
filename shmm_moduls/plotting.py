@@ -444,16 +444,54 @@ def plot_average_training_curve(
 
 # --- Trainingsdauer/Epochenzahl (Rechenaufwand-Vergleich) --------------
 
+def _run_baselines(results: list, timing_baseline: str = "median") -> dict[str, float]:
+    """Pro Durchlauf (identifiziert über `hierarchy_config`, das für alle
+    innerhalb eines Durchlaufs trainierten Modelle identisch ist) die
+    Referenz-Rechenzeit: der Median (Standard) oder Mittelwert der
+    Trainingsdauer ALLER in diesem Durchlauf trainierten Modelle
+    (über alle Modellklassen und Lernraten hinweg, ohne
+    evaluate_true_model-Ergebnisse). Da alle Modelle eines Durchlaufs auf
+    derselben Hardware zur selben Zeit trainiert werden, wirkt diese
+    Referenzzeit als durchlaufspezifische Hardware-Baseline: Sie schwankt
+    zwischen Durchläufen (unterschiedliche Maschinen/Auslastung), ist aber
+    innerhalb eines Durchlaufs für alle Modelle identisch, sodass sich
+    Hardware-Unterschiede zwischen Durchläufen durch Division
+    herauskürzen (siehe `aggregate_timing`).
+    """
+    by_run: dict[str, list[float]] = defaultdict(list)
+    for r in results:
+        if r.error is not None or r.epochs_trained <= 0:
+            continue
+        by_run[r.hierarchy_config].append(r.train_seconds)
+    reduce_fn = np.median if timing_baseline == "median" else np.mean
+    return {run: float(reduce_fn(np.asarray(secs, dtype=float))) for run, secs in by_run.items() if secs}
+
+
 def aggregate_timing(
     results: list, group_fn=group_by_classification_config, by_learning_rate: bool = True,
+    timing_baseline: str = "median",
 ) -> dict:
     """
-    Mittelwert/Standardabweichung/Anzahl von train_seconds, epochs_trained
-    und der daraus abgeleiteten Sekunden pro Epoche, gruppiert wie
-    aggregate_final_metric. Läuft NICHT über evaluate_true_model-Ergebnisse
-    (epochs_trained=0, kein Training) - diese werden automatisch
-    ausgeschlossen. Ergänzt die Gütewert-Auswertung in Abschnitt 4.4 um
-    den tatsächlichen Rechenaufwand je Modellklasse.
+    Mittelwert/Standardabweichung/Anzahl von train_seconds, epochs_trained,
+    der daraus abgeleiteten Sekunden pro Epoche, sowie der RELATIVEN
+    Rechenzeit, gruppiert wie aggregate_final_metric. Läuft NICHT über
+    evaluate_true_model-Ergebnisse (epochs_trained=0, kein Training) -
+    diese werden automatisch ausgeschlossen. Ergänzt die Gütewert-Auswertung
+    in Abschnitt 4.4 um den tatsächlichen Rechenaufwand je Modellklasse.
+
+    Absolute Sekundenwerte (train_seconds) sind zwischen den 1000
+    unabhängigen Durchläufen nicht direkt vergleichbar, da die
+    verfügbare Hardware (Maschine, Auslastung) zwischen Durchläufen
+    schwanken kann. Die relative Rechenzeit `relative_time` normiert
+    dies pro Durchlauf: `relative_time(m, r) = train_seconds(m, r) /
+    baseline(r)`, wobei `baseline(r)` der Median (bzw. bei
+    `timing_baseline="mean"` der Mittelwert) der Trainingsdauer ALLER in
+    Durchlauf `r` trainierten Modelle ist (`_run_baselines`). Ein Wert
+    von `1.0` entspricht damit exakt der durchlaufspezifischen
+    Referenzgeschwindigkeit, Werte `<1`/`>1` einem im Vergleich zu den
+    übrigen Modellen desselben Durchlaufs schnelleren/langsameren
+    Training - unabhängig davon, wie schnell die Hardware dieses
+    Durchlaufs insgesamt war.
 
     by_learning_rate=True: Schlüssel (exp_name, learning_rate, group).
     by_learning_rate=False: Schlüssel (exp_name, group) - über alle
@@ -461,38 +499,50 @@ def aggregate_timing(
         Architektur-Kostenvergleich, unabhängig davon, welche Lernrate
         beim jeweiligen Lauf verwendet wurde).
     """
+    baselines = _run_baselines(results, timing_baseline=timing_baseline)
     buckets: dict[tuple, list] = defaultdict(list)
     for r in results:
         if r.error is not None or r.epochs_trained <= 0:
             continue
+        base = baselines.get(r.hierarchy_config)
+        if not base:
+            continue
         key = ((r.exp_name, r.learning_rate, group_fn(r.hierarchy_config)) if by_learning_rate
                else (r.exp_name, group_fn(r.hierarchy_config)))
-        buckets[key].append((r.train_seconds, r.epochs_trained, r.train_seconds / r.epochs_trained))
+        buckets[key].append((r.train_seconds, r.epochs_trained, r.train_seconds / r.epochs_trained,
+                              r.train_seconds / base))
 
     out = {}
     for key, rows in buckets.items():
-        seconds, epochs, per_epoch = (np.asarray(x, dtype=float) for x in zip(*rows))
+        seconds, epochs, per_epoch, rel = (np.asarray(x, dtype=float) for x in zip(*rows))
         out[key] = {
             "train_seconds_mean": float(seconds.mean()), "train_seconds_std": float(seconds.std()),
             "epochs_trained_mean": float(epochs.mean()), "epochs_trained_std": float(epochs.std()),
             "seconds_per_epoch_mean": float(per_epoch.mean()), "seconds_per_epoch_std": float(per_epoch.std()),
+            "relative_time_mean": float(rel.mean()), "relative_time_std": float(rel.std()),
             "n": len(rows),
         }
     return out
 
 
-def save_timing_table(results: list, out_path: Path, group_fn=group_by_classification_config) -> None:
-    """CSV mit Trainingsdauer, Epochenzahl und Sekunden/Epoche - Mittelwert/
-    Std./n je (Gruppe, Modell, Lernrate)."""
+def save_timing_table(
+    results: list, out_path: Path, group_fn=group_by_classification_config, timing_baseline: str = "median",
+) -> None:
+    """CSV mit Trainingsdauer, Epochenzahl, Sekunden/Epoche und relativer
+    (durchlaufnormierter) Rechenzeit - Mittelwert/Std./n je (Gruppe, Modell,
+    Lernrate)."""
     rows = []
-    for (exp_name, lr, group), stats in aggregate_timing(results, group_fn=group_fn, by_learning_rate=True).items():
+    for (exp_name, lr, group), stats in aggregate_timing(
+        results, group_fn=group_fn, by_learning_rate=True, timing_baseline=timing_baseline,
+    ).items():
         rows.append({"group": group, "exp_name": exp_name, "learning_rate": lr, **stats})
     rows.sort(key=lambda r: (r["group"], r["exp_name"], r["learning_rate"]))
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["group", "exp_name", "learning_rate", "train_seconds_mean", "train_seconds_std",
-                  "epochs_trained_mean", "epochs_trained_std", "seconds_per_epoch_mean", "seconds_per_epoch_std", "n"]
+                  "epochs_trained_mean", "epochs_trained_std", "seconds_per_epoch_mean", "seconds_per_epoch_std",
+                  "relative_time_mean", "relative_time_std", "n"]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -504,19 +554,25 @@ _TIMING_LABELS = {
     "train_seconds": "Trainingsdauer (s)",
     "epochs_trained": "Anzahl Epochen",
     "seconds_per_epoch": "Sekunden/Epoche",
+    "relative_time": "Relative Rechenzeit (× Durchlauf-Median)",
 }
 
 
 def plot_timing_distribution(
     results: list, out_path: Path, group: str, group_fn=group_by_classification_config,
-    metric_key: str = "train_seconds",
+    metric_key: str = "relative_time", timing_baseline: str = "median",
 ) -> None:
-    """Balkendiagramm: Mittelwert ± Std. von train_seconds/epochs_trained/
-    seconds_per_epoch je Modell, über ALLE Lernraten und Wiederholungen
-    von `group` hinweg (Rechenaufwand ist nicht Teil der in Abschnitt 4.4
-    berichteten Gütemetriken, aber nützlich für den Vergleich der
-    Modellklassen untereinander)."""
-    agg = aggregate_timing(results, group_fn=group_fn, by_learning_rate=False)
+    """Balkendiagramm: Mittelwert ± Std. von relative_time (Standard;
+    alternativ train_seconds/epochs_trained/seconds_per_epoch) je Modell,
+    über ALLE Lernraten und Wiederholungen von `group` hinweg
+    (Rechenaufwand ist nicht Teil der in Abschnitt 4.4 berichteten
+    Gütemetriken, aber nützlich für den Vergleich der Modellklassen
+    untereinander). `relative_time` ist gegenüber Hardware-Unterschieden
+    zwischen Durchläufen robust (siehe `aggregate_timing`) und ist daher
+    die für den Modellvergleich empfohlene Größe; `train_seconds` bleibt
+    zusätzlich verfügbar, ist zwischen Durchläufen aber nur bedingt
+    vergleichbar."""
+    agg = aggregate_timing(results, group_fn=group_fn, by_learning_rate=False, timing_baseline=timing_baseline)
     rows = [(exp_name, stats) for (exp_name, g), stats in agg.items() if g == group]
     rows.sort(key=lambda kv: kv[1][f"{metric_key}_mean"])
     if not rows:
@@ -545,7 +601,7 @@ def plot_timing_distribution(
 
 def generate_aggregate_report(
     results: list, out_dir: Path, group_fn=group_by_classification_config,
-    metrics=("loss", "accuracy"),
+    metrics=("loss", "accuracy"), timing_baseline: str = "median",
 ) -> None:
     """
     Erzeugt den vollständigen Aggregat-Bericht über alle Wiederholungen
@@ -557,13 +613,15 @@ def generate_aggregate_report(
     Aufruf zusammen - der übliche Weg, das "Diagramm über alle N
     Wiederholungen derselben Einstellung" zu bekommen. Enthält zusätzlich
     eine Auswertung der Trainingsdauer (save_timing_table/
-    plot_timing_distribution): Trainingszeit, Epochenzahl und Sekunden/
-    Epoche je Modell, ebenfalls mit Mittelwert/Std. über alle
-    Wiederholungen.
+    plot_timing_distribution): Trainingszeit, Epochenzahl, Sekunden/
+    Epoche sowie die gegenüber Hardware-Unterschieden zwischen Durchläufen
+    robuste relative Rechenzeit (`relative_time`, Verhältnis zum
+    Durchlauf-Median bzw. -Mittelwert, je nach `timing_baseline`) je
+    Modell, jeweils mit Mittelwert/Std. über alle Wiederholungen.
     """
     out_dir = Path(out_dir)
     save_aggregate_table(results, out_dir / "aggregate.csv", metrics=metrics, group_fn=group_fn)
-    save_timing_table(results, out_dir / "timing.csv", group_fn=group_fn)
+    save_timing_table(results, out_dir / "timing.csv", group_fn=group_fn, timing_baseline=timing_baseline)
 
     groups = sorted({group_fn(r.hierarchy_config) for r in results if r.hierarchy_config or True})
     for group in groups:
@@ -571,8 +629,11 @@ def generate_aggregate_report(
         for metric in metrics:
             plot_metric_distribution(results, metric, group_dir / f"{metric}_distribution.png", group=group, group_fn=group_fn)
 
-        for metric_key in ("train_seconds", "epochs_trained", "seconds_per_epoch"):
-            plot_timing_distribution(results, group_dir / f"{metric_key}_distribution.png", group=group, group_fn=group_fn, metric_key=metric_key)
+        for metric_key in ("relative_time", "train_seconds", "epochs_trained", "seconds_per_epoch"):
+            plot_timing_distribution(
+                results, group_dir / f"{metric_key}_distribution.png", group=group, group_fn=group_fn,
+                metric_key=metric_key, timing_baseline=timing_baseline,
+            )
 
         best_lr = select_best_learning_rates(results, group, metric="loss", group_fn=group_fn)
         for exp_name, lr in best_lr.items():

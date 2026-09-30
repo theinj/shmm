@@ -30,7 +30,9 @@ SAVE_CHECKPOINTS = False
 
 # --- Zustandsdekodierung: zufällige gemischte HMM (Abschnitt 3.1) ------
 TOKENLEVEL_T = 20 if TEST else 100                # Sequenzlänge
-TOKENLEVEL_BATCH_SIZE = 8 if TEST else 256         # = N: Sequenzen pro HMM UND Trainings-Batchgröße
+TOKENLEVEL_BATCH_SIZE = 8 if TEST else 256
+TOKENLEVEL_EVAL_SIZE = 8 if TEST else 256              # Auswertungsset: dieselben Klassen-Templates,
+TOKENLEVEL_EVAL_SEED_OFFSET = 10_000_000         # = N: Sequenzen pro HMM UND Trainings-Batchgröße
 TOKENLEVEL_NUM_HMMS = 2 if TEST else 1000         # Anzahl unabhängiger Durchläufe
 TOKENLEVEL_HMM_K = 3 if TEST else 5               # Basisalphabet, Zustandsraum = K^2
 TOKENLEVEL_HMM_OUT_DEGREE = 2                     # Sparsity (vgl. Lafferty et al. 2001, Abschn. 5.2)
@@ -47,14 +49,14 @@ TOKENLEVEL_ALPHA_SWEEP_MODELS = [
 
 # --- Sequenzklassifikation: hierarchisch komponierte Muster (Abschnitt 3.2) --
 CLASS_N_SAMPLES = 50 if TEST else 8192             # N (Def. 3.2 "Konkrete Parametrisierung")
-CLASS_BATCH_SIZE = 8 if TEST else 64
+CLASS_BATCH_SIZE = 8 if TEST else 256
 CLASS_EVAL_SIZE = 8 if TEST else 256              # Auswertungsset: dieselben Klassen-Templates,
 CLASS_EVAL_SEED_OFFSET = 10_000_000
 CLASS_HIERARCHY_LEVELS = [1] if TEST else [1, 2, 3]   # D
 CLASS_PATTERNS_PER_LEVEL = [3]                         # K
 CLASS_BASE_PATTERN_LENGTH = [4] if TEST else [8]       # L
 CLASS_NUM_CLASSES = [2] if TEST else [4]             # C
-CLASS_ALPHABET_SIZE = 2 if TEST else 26                # M (NICHT binär)
+CLASS_ALPHABET_SIZE = 2 if TEST else 26                # M
 CLASS_NOISE_ALPHA = 3.0                                  # Beta(alpha, alpha) für Rauschlänge
 CLASS_NUM_RUNS = 2 if TEST else 1000                     # Wiederholungen je Parameterkombination
 CLASS_RUN_SEED_START = 20260921
