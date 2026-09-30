@@ -1,63 +1,156 @@
-"""params.py - Alle einstellbaren Parameter an einem Ort.
+"""models.py - Modell-Konfigurationen für den Modellvergleich (Kapitel 4
+der Bachelorarbeit: HMM erster/höherer Ordnung, mehrschichtige HMM-Stapel,
+RNN/LSTM-Varianten mit und ohne HMM, Transformer, MLP-Baseline).
 
-Ändere hier, nicht in run_token_level.py / run_classification.py.
-
-TEST = True:  kleine, schnelle Werte zum lokalen Ausprobieren (Sekunden
-    bis wenige Minuten - kein HPC, kein ibutils nötig).
-TEST = False: die tatsächlich für die Bachelorarbeit verwendeten Werte
-    (siehe Kapitel 3 "Daten" und Kapitel 4 "Trainings- und
-    Auswertungsverfahren"). Ein voller Lauf ist für den HPC gedacht und
-    dauert - je nach Cluster - Stunden bis Tage.
+Jede Config in MODELS wird an `shmm_moduls.get_model(...)` durchgereicht. Das
+Feld "output" (Anzahl Ausgabeklassen bzw. -zustände) hängt vom jeweiligen
+Durchlauf ab - Anzahl HMM-Zustände (Zustandsdekodierung) bzw. Anzahl
+Klassen (Klassifikation), siehe Kapitel 3 - und wird deshalb NICHT hier
+festgelegt, sondern von run_token_level.py / run_classification.py vor
+jedem Training in eine Kopie der jeweiligen Config eingesetzt.
 """
-from pathlib import Path
+from typing import Literal
 
-TEST = True
+BASE_LATENT = 32
+BASE_STATES = 5
 
-# False: reduzierte Modellbatterie (models.EXPERIMENTS["base"/"base_class"]).
-# True: alle Modelle (models.EXPERIMENTS["full"]).
-ALL_MODELS = False
 
-# --- Trainingsverfahren, gemeinsam für beide Aufgaben (Abschnitt 4.2) ---
-WEIGHT_DECAY = 1e-2
-CONVERGENCE_THRESHOLD = 1e-4
-CONVERGENCE_PATIENCE = 5
-BEST_VALUE_PATIENCE = 5
-MAX_EPOCHS = 5 if TEST else 100
-STEPS_PER_EPOCH = 10 if TEST else 100
-# zwei feste Lernraten, siehe Abschnitt 4.2 ("Trainingsverfahren")
-LEARNING_RATES = [1e-1] if TEST else [1e-2, 1e-3]
-SAVE_CHECKPOINTS = False
+def _hmm(embed=16, states=BASE_STATES, order=1, heads=3, embed_ignore_order=False, latent=None):
+    cfg = {
+        "embed": embed,
+        "states": states,
+        "order": order,
+        "heads": heads,
+        "embedIgnoreOrder": embed_ignore_order,
+    }
+    if latent is not None:
+        cfg["latent"] = latent
+    return cfg
 
-# --- Zustandsdekodierung: zufällige gemischte HMM (Abschnitt 3.1) ------
-TOKENLEVEL_T = 20 if TEST else 100                # Sequenzlänge
-TOKENLEVEL_BATCH_SIZE = 8 if TEST else 256
-TOKENLEVEL_EVAL_SIZE = 8 if TEST else 256              # Auswertungsset: dieselben Klassen-Templates,
-TOKENLEVEL_EVAL_SEED_OFFSET = 10_000_000         # = N: Sequenzen pro HMM UND Trainings-Batchgröße
-TOKENLEVEL_NUM_HMMS = 2 if TEST else 1000         # Anzahl unabhängiger Durchläufe
-TOKENLEVEL_HMM_K = 3 if TEST else 5               # Basisalphabet, Zustandsraum = K^2
-TOKENLEVEL_HMM_OUT_DEGREE = 2                     # Sparsity (vgl. Lafferty et al. 2001, Abschn. 5.2)
-TOKENLEVEL_HMM_M = 26                              # Emissionsalphabet (NICHT binär, Def. 3.1)
-TOKENLEVEL_HMM_ALPHA_RANGE = (0.0, 1.0)
-TOKENLEVEL_HMM_SEED_START = 20260921
-TOKENLEVEL_RESULTS_PATH = Path("./results_token_level")
-# Modelle, die im alpha-Sweep-Diagramm gegenübergestellt werden
-# (Loss/Accuracy vs. alpha, analog zu Lafferty et al. 2001, Abschn. 5.2)
-TOKENLEVEL_ALPHA_SWEEP_MODELS = [
-    "true_generator", "single_hmm_order1", "single_hmm_order2",
-    "multilayer_hmm_2x_order1", "bilstm_hmm_order1", "transformer_small",
-]
 
-# --- Sequenzklassifikation: hierarchisch komponierte Muster (Abschnitt 3.2) --
-CLASS_N_SAMPLES = 50 if TEST else 8192             # N (Def. 3.2 "Konkrete Parametrisierung")
-CLASS_BATCH_SIZE = 8 if TEST else 256
-CLASS_EVAL_SIZE = 8 if TEST else 256              # Auswertungsset: dieselben Klassen-Templates,
-CLASS_EVAL_SEED_OFFSET = 10_000_000
-CLASS_HIERARCHY_LEVELS = [1] if TEST else [1, 2, 3]   # D
-CLASS_PATTERNS_PER_LEVEL = [3]                         # K
-CLASS_BASE_PATTERN_LENGTH = [4] if TEST else [8]       # L
-CLASS_NUM_CLASSES = [2] if TEST else [4]             # C
-CLASS_ALPHABET_SIZE = 2 if TEST else 26                # M
-CLASS_NOISE_ALPHA = 3.0                                  # Beta(alpha, alpha) für Rauschlänge
-CLASS_NUM_RUNS = 2 if TEST else 1000                     # Wiederholungen je Parameterkombination
-CLASS_RUN_SEED_START = 20260921
-CLASS_RESULTS_PATH = Path("./results_classification")
+def _mlp(units=9):
+    return {"units": units}
+
+
+def _rnn(type="lstm", units=32, bidirectional=False):
+    return {"type": type, "units": units, "bidirectional": bidirectional}
+
+
+def _mlp_only(units=32, layers=1, latent=BASE_LATENT, activation_hidden="relu"):
+    """Config für reines MLP-Baseline-Modell (kein HMM/RNN/Transformer)."""
+    return {"layers": layers, "latent": latent, "units": units, "activation_hidden": activation_hidden}
+
+
+def _transformer(d_model=64, num_heads=4, num_layers=2, dff=256, dropout=0.1):
+    return {"d_model": d_model, "num_heads": num_heads, "num_layers": num_layers, "dff": dff, "dropout": dropout}
+
+
+MODELS = {
+    "mlp_baseline": {
+        "mlp_only": _mlp_only(units=32, layers=1),
+    },
+    "single_hmm_order1": {
+        "layers": 1, "latent": BASE_LATENT, "hmm": _hmm(order=1),
+    },
+    "single_hmm_order1_mlp": {
+        "layers": 1, "latent": BASE_LATENT, "hmm": _hmm(order=1), "mlp": _mlp(units=9),
+    },
+    "single_hmm_order2": {
+        "layers": 1, "latent": BASE_LATENT, "hmm": _hmm(order=2),
+    },
+    "single_hmm_order3": {
+        "layers": 1, "latent": BASE_LATENT, "hmm": _hmm(order=3),
+    },
+    "multilayer_hmm_2x_order1": {
+        "layers": 2, "latent": BASE_LATENT, "hmm": _hmm(order=1),
+    },
+    "multilayer_hmm_3x_order1": {
+        "layers": 3, "latent": BASE_LATENT, "hmm": _hmm(order=1),
+    },
+    "multilayer_hmm_2x_order1_mlp": {
+        "layers": 2, "latent": BASE_LATENT, "hmm": _hmm(order=1), "mlp": _mlp(units=9),
+    },
+    "multilayer_hmm_3x_order1_mlp": {
+        "layers": 3, "latent": BASE_LATENT, "hmm": _hmm(order=1), "mlp": _mlp(units=9),
+    },
+    "multilayer_hmm_mixed_order": {
+        "layers": 2, "latent": BASE_LATENT,
+        "hmm": [_hmm(order=1, latent=BASE_LATENT), _hmm(order=2, latent=BASE_LATENT)],
+    },
+    "lstm_only": {
+        "layers": 0, "latent": BASE_LATENT, "rnn": _rnn("lstm", units=16), "hmm": _hmm(),
+    },
+    "gru_only": {
+        "layers": 0, "latent": BASE_LATENT, "rnn": _rnn("gru", units=16), "hmm": _hmm(),
+    },
+    "rnn_only": {
+        "layers": 0, "latent": BASE_LATENT, "rnn": _rnn("rnn", units=16), "hmm": _hmm(),
+    },
+    "lstm_hmm_order1": {
+        "layers": 1, "latent": BASE_LATENT, "rnn": _rnn("lstm", units=16), "hmm": _hmm(order=1),
+    },
+    "lstm_hmm_order2": {
+        "layers": 1, "latent": BASE_LATENT, "rnn": _rnn("lstm", units=16), "hmm": _hmm(order=2),
+    },
+    "gru_hmm_order1": {
+        "layers": 1, "latent": BASE_LATENT, "rnn": _rnn("gru", units=16), "hmm": _hmm(order=1),
+    },
+    "bilstm": {
+        "layers": 0, "latent": BASE_LATENT,
+        "rnn": _rnn("lstm", units=16, bidirectional=True), "hmm": _hmm(),
+    },
+    "bilstm_hmm_order1": {
+        "layers": 1, "latent": BASE_LATENT,
+        "rnn": _rnn("lstm", units=16, bidirectional=True), "hmm": _hmm(order=1),
+    },
+    "lstm_multilayer_hmm_2x": {
+        "layers": 2, "latent": BASE_LATENT, "rnn": _rnn("lstm", units=16), "hmm": _hmm(order=1),
+    },
+    "lstm_multilayer_hmm_mlp": {
+        "layers": 2, "latent": BASE_LATENT, "rnn": _rnn("lstm", units=16),
+        "hmm": _hmm(order=1), "mlp": _mlp(units=9),
+    },
+    "transformer_small": {
+        "transformer": _transformer(d_model=32, num_heads=2, num_layers=2),
+    },
+    "transformer_base": {
+        "transformer": _transformer(d_model=64, num_heads=4, num_layers=2),
+    },
+    "transformer_large": {
+        "transformer": _transformer(d_model=128, num_heads=8, num_layers=4),
+    },
+}
+
+# Benannte Teilmengen von MODELS. "base"/"base_class" sind die in
+# params.ALL_MODELS=False verwendete, reduzierte Modellbatterie für
+# Zustandsdekodierung bzw. Klassifikation; "full" ist die vollständige
+# Batterie (params.ALL_MODELS=True). Es gibt bewusst keine dritte,
+# kleinere "test"-Teilmenge mehr - params.TEST steuert stattdessen die
+# Datengröße/Wiederholungszahl, nicht die Modellauswahl (siehe params.py).
+EXPERIMENTS = {
+    "base": [
+        "single_hmm_order1",
+        "single_hmm_order2",
+        "multilayer_hmm_2x_order1",
+        "multilayer_hmm_2x_order1_mlp",
+        "multilayer_hmm_3x_order1_mlp",
+        "bilstm",
+        "transformer_small",
+    ],
+    "base_class": [
+        "mlp_baseline",
+        "single_hmm_order1",
+        "single_hmm_order2",
+        "multilayer_hmm_2x_order1",
+        "multilayer_hmm_2x_order1_mlp",
+        "multilayer_hmm_3x_order1_mlp",
+        "transformer_small",
+        "bilstm",
+    ],
+    "full": list(MODELS),
+}
+
+
+def get_experiments(experiment: Literal["base", "base_class", "full"]) -> dict:
+    """Gibt die Modell-Configs für einen der drei Sätze aus EXPERIMENTS zurück."""
+    return {name: MODELS[name] for name in EXPERIMENTS[experiment]}
